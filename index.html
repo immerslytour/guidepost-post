@@ -21,12 +21,12 @@
   p.sub{ font-size:14px; color:#666; margin:0 0 22px; }
   .field{ margin-bottom:16px; }
   label{ display:block; font-size:13px; font-weight:600; margin-bottom:6px; color:#333; }
-  input[type="text"], textarea{
+  textarea{
     width:100%; border:1px solid #D8D8D6; border-radius:8px;
     font-size:15px; padding:10px 12px; font-family:inherit; color:#1A1A1A; background:#fff;
+    resize:vertical; min-height:90px;
   }
-  input:focus, textarea:focus{ outline:none; border-color:#C8102E; }
-  textarea{ resize:vertical; min-height:90px; }
+  textarea:focus{ outline:none; border-color:#C8102E; }
   input[type="file"]{ width:100%; font-size:14px; padding:10px 0; }
   .preview{ margin-top:10px; border-radius:8px; overflow:hidden; max-height:200px; display:none; }
   .preview img{ width:100%; display:block; }
@@ -35,7 +35,11 @@
     padding:13px; font-size:15px; font-weight:600; cursor:pointer;
   }
   button[type="submit"]:disabled{ opacity:.5; cursor:not-allowed; }
+  .status{ margin-top:12px; font-size:13px; text-align:center; color:#666; }
   .not-found{ text-align:center; color:#666; padding:40px 0; }
+  .success{ display:none; text-align:center; padding:20px 0; }
+  .success h2{ font-size:19px; margin:0 0 8px; }
+  .success p{ color:#666; font-size:14px; }
 </style>
 </head>
 <body>
@@ -49,52 +53,49 @@
     <h1 id="bizName">Publicación de hoy</h1>
     <p class="sub" id="todayDate"></p>
 
-    <form name="daily-post" method="POST" action="/gracias.html" data-netlify="true" enctype="multipart/form-data">
-      <input type="hidden" name="form-name" value="daily-post" />
-      <input type="hidden" name="slug" id="slugField" />
-      <input type="hidden" name="negocio" id="negocioField" />
-      <input type="hidden" name="fb_page_id" id="fbPageField" />
-
+    <form id="postForm">
       <div class="field">
         <label>Foto de hoy</label>
-        <input type="file" accept="image/*" id="photoInput" name="foto" required />
+        <input type="file" accept="image/*" id="photoInput" required />
         <div class="preview" id="preview"><img id="previewImg" /></div>
       </div>
-
       <div class="field">
         <label>¿Qué quieres anunciar?</label>
-        <textarea name="descripcion" placeholder="Ej: Hoy estamos en el parque de la calle 5ta, especial de birria desde las 11am" required></textarea>
+        <textarea id="descInput" placeholder="Ej: Hoy estamos en el parque de la calle 5ta, especial de birria desde las 11am" required></textarea>
       </div>
-
-      <button type="submit">Enviar publicación</button>
+      <button type="submit" id="submitBtn">Enviar publicación</button>
+      <div class="status" id="statusMsg"></div>
     </form>
+  </div>
+
+  <div class="success" id="successScreen">
+    <h2>¡Recibido!</h2>
+    <p>Tu publicación queda lista para salir hoy en redes y Google Maps.</p>
   </div>
 </div>
 
 <script>
 const SUPABASE_URL = 'https://jmiuwoyowqcfdymxwiuf.supabase.co';
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptaXV3b3lvd3FjZmR5bXh3aXVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI0MjA2MjAsImV4cCI6MjA5Nzk5NjYyMH0.P8PFaw0yEpihbqJ-9ztyrpGJ8QmzSMlABwlGbixRjdo';
+const MAKE_WEBHOOK = 'https://hook.us2.make.com/xaalx3gxyvhyvxrel7r96dbkqfp668ka';
 
 document.getElementById('todayDate').textContent = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
+
+let currentClient = null;
 
 async function init() {
   const params = new URLSearchParams(window.location.search);
   const slug = params.get('slug');
-
   if (!slug) { showNotFound(); return; }
 
   const res = await fetch(`${SUPABASE_URL}/rest/v1/clients?slug=eq.${slug}&active=eq.true&select=slug,name,fb_page_id`, {
     headers: { 'apikey': ANON_KEY, 'Authorization': `Bearer ${ANON_KEY}` }
   });
-
   const data = await res.json();
   if (!data || data.length === 0) { showNotFound(); return; }
 
-  const client = data[0];
-  document.getElementById('bizName').textContent = client.name;
-  document.getElementById('slugField').value = client.slug;
-  document.getElementById('negocioField').value = client.name;
-  document.getElementById('fbPageField').value = client.fb_page_id;
+  currentClient = data[0];
+  document.getElementById('bizName').textContent = currentClient.name;
   document.getElementById('formWrap').style.display = 'block';
 }
 
@@ -102,9 +103,8 @@ function showNotFound() {
   document.getElementById('notFound').style.display = 'block';
 }
 
-const photoInput = document.getElementById('photoInput');
-photoInput.addEventListener('change', () => {
-  const file = photoInput.files[0];
+document.getElementById('photoInput').addEventListener('change', function() {
+  const file = this.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
@@ -112,6 +112,53 @@ photoInput.addEventListener('change', () => {
     document.getElementById('preview').style.display = 'block';
   };
   reader.readAsDataURL(file);
+});
+
+document.getElementById('postForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!currentClient) return;
+
+  const submitBtn = document.getElementById('submitBtn');
+  const statusEl = document.getElementById('statusMsg');
+  const file = document.getElementById('photoInput').files[0];
+  const descripcion = document.getElementById('descInput').value.trim();
+
+  if (!file || !descripcion) return;
+
+  submitBtn.disabled = true;
+  statusEl.textContent = 'Enviando...';
+
+  try {
+    // Convert photo to base64
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = e => resolve(e.target.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+
+    // Send directly to Make webhook
+    await fetch(MAKE_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slug: currentClient.slug,
+        negocio: currentClient.name,
+        fb_page_id: currentClient.fb_page_id,
+        descripcion: descripcion,
+        foto_base64: base64,
+        foto_nombre: file.name
+      })
+    });
+
+    document.getElementById('formWrap').style.display = 'none';
+    document.getElementById('successScreen').style.display = 'block';
+
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = 'Algo falló. Intenta otra vez.';
+    submitBtn.disabled = false;
+  }
 });
 
 init();
